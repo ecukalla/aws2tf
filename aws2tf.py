@@ -143,7 +143,7 @@ def dd_threaded(ti):
 def kd_threaded(ti):
     if not context.rdep[ti]:
         i = ti.split(".")[0]
-        id = ti.split(".")[1]
+        id = ti.split(".", 1)[1]
         log.debug("type="+i+" id="+str(id))
         common.call_resource(i, id)
     return
@@ -947,7 +947,7 @@ def process_known_dependencies():
         context.tracking_message = "Stage 4 of 10, Known Dependancies - Multi Threaded "+str(context.cores)
         with ThreadPoolExecutor(max_workers=context.cores) as executor12:
             futures2 = [
-                executor12.submit(kd_threaded(ti))
+                executor12.submit(kd_threaded, ti)
                 for ti in list(context.rdep)
             ]
     else:
@@ -1013,7 +1013,7 @@ def process_detected_dependencies():
                 log.info(f"Processing {total_deps} new detected dependencies...")
                 with ThreadPoolExecutor(max_workers=context.cores) as executor2:
                     futures = [
-                        executor2.submit(dd_threaded(ti))
+                        executor2.submit(dd_threaded, ti)
                         for ti in unprocessed_deps
                     ]
                     # Show progress as dependencies are processed
@@ -1235,4 +1235,3 @@ def main_new():
 
 if __name__ == '__main__':
     main_new()
-

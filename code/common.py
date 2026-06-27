@@ -1,5 +1,6 @@
 import boto3
 from botocore.exceptions import ClientError
+from botocore.config import Config
 import sys
 import subprocess
 import os
@@ -27,6 +28,8 @@ from pathlib import Path
 
 # Get logger from parent aws2tf module
 log = logging.getLogger('aws2tf')
+
+BOTO3_RETRY_CONFIG = Config(retries={'max_attempts': 10, 'mode': 'standard'})
 
 # Conditional warning function
 def log_warning(message, *args, **kwargs):
@@ -822,8 +825,8 @@ AWS_RESOURCE_MODULES = {
 def call_resource(type, id):
    #log.debug("--1-- in call_resources >>>>> "+type+"   "+str(id))
    if type in context.all_extypes:
-      log.debug("Common Excluding: %s %s %s",  type, id) 
-      pkey=type+"."+id
+      log.debug("Common Excluding: %s %s", type, id) 
+      pkey=str(type)+"."+str(id)
       context.rproc[pkey] = True
       return
    
@@ -908,7 +911,7 @@ def call_resource(type, id):
          log.debug(f"{e=}")
          exc_type, exc_obj, exc_tb = sys.exc_info()
          fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
-         log.debug("%s %s %s %s",  exc_type, fname, exc_tb.tb_lineno)
+         log.debug("%s %s %s", exc_type, fname, exc_tb.tb_lineno)
       pass
 
    except SyntaxError:
@@ -921,7 +924,7 @@ def call_resource(type, id):
          log.debug(f"{e=}")
          exc_type, exc_obj, exc_tb = sys.exc_info()
          fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
-         log.debug("%s %s %s %s",  exc_type, fname, exc_tb.tb_lineno)
+         log.debug("%s %s %s", exc_type, fname, exc_tb.tb_lineno)
 
       pass
 
@@ -940,7 +943,7 @@ def call_resource(type, id):
 
          exc_type, exc_obj, exc_tb = sys.exc_info()
          fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
-         log.error("%s %s %s %s",  exc_type, fname, exc_tb.tb_lineno)
+         log.error("%s %s %s", exc_type, fname, exc_tb.tb_lineno)
          if rr is False:
             log.error("--->> Could not get resource "+type+" id="+str(id))
             pass
@@ -2197,7 +2200,7 @@ def call_boto3(type,clfn,descfn,topkey,key,id):
       #response=get_boto3_resp(descfn)  # sets response to [] if nothing saved
       response=[]
       if response == []:
-         client = boto3.client(clfn) 
+         client = boto3.client(clfn, config=BOTO3_RETRY_CONFIG) 
          #if context.debug: print("client")
          try:
             paginator = client.get_paginator(descfn)
@@ -2267,9 +2270,15 @@ def call_boto3(type,clfn,descfn,topkey,key,id):
             else:
                if context.debug: log.debug("--1b")
                # main get all call - usually a list- describe- or get- 
-               for page in paginator.paginate(): 
-                  response.extend(page[topkey])
-               #sav_boto3_rep(descfn,response)
+               try:
+                   for page in paginator.paginate(): 
+                      response.extend(page[topkey])
+                   #sav_boto3_rep(descfn,response)
+               except Exception as e:
+                    if 'UnsupportedCommandException' in str(e):
+                        log.warning(e)
+                    else:
+                        raise e
 
                if id is not None:
                   fresp=response
@@ -2280,9 +2289,9 @@ def call_boto3(type,clfn,descfn,topkey,key,id):
                   for i in fresp:
                      if context.debug: 
                         try:
-                           log.debug("%s %s %s",  i[key], id)
+                           log.debug("%s %s", i[key], id)
                         except TypeError:
-                           log.debug("%s %s %s",  i, id)
+                           log.debug("%s %s", i, id)
                      try:
                         if id in i[key]:
                            response=[i]
@@ -2345,7 +2354,10 @@ def call_boto3(type,clfn,descfn,topkey,key,id):
                
 
          except Exception as e:
-            handle_error(e,str(inspect.currentframe().f_code.co_name),clfn,descfn,topkey,id)
+            try:
+                handle_error(e,str(inspect.currentframe().f_code.co_name),clfn,descfn,topkey,id)
+            except Exception as e:
+                log.warning(e)
 
          rl=len(response)
          if rl==0:
@@ -2406,6 +2418,9 @@ def handle_error(e,frame,clfn,descfn,topkey,id):
    elif exn=="ForbiddenException":
       log.debug("Call Forbidden exception for "+fname+" - returning")
       return
+   elif exn in ("ThrottlingException", "TooManyRequestsException", "TooManyRequests", "RequestLimitExceeded", "ProvisionedThroughputExceededException") or "Rate exceeded" in str(e):
+      log.warning(str(e)+" for "+frame+" id="+str(id)+" - throttled, returning")
+      return
    elif exn == "ParamValidationError" or exn=="ValidationException" or exn=="InvalidRequestException" or exn =="InvalidParameterValueException" or exn=="InvalidParameterException":
       log.warning(str(exc_obj)+" for "+frame+" id="+str(id)+" - returning")
       return
@@ -2414,8 +2429,10 @@ def handle_error(e,frame,clfn,descfn,topkey,id):
       return  
    
    elif exn=="AccessDeniedException":
-      pkey=frame.split("get_")[1]
-      log.warning("AccessDeniedException exception for "+fname+" - returning")
+      if frame.startswith("get_"):
+         pkey=frame.split("get_", 1)[1]+"."+str(id)
+         context.rproc[pkey]=True
+      log.warning("AccessDeniedException exception for "+frame+" "+fname+" id="+str(id)+" - returning")
       return
 
 
