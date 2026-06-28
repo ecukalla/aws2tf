@@ -34,8 +34,12 @@ def aws_lb_listener(t1,tt1,tt2,flag1,flag2):
 	if "order" == tt1:
 		if tt2 == "0": skip=1
 	elif "duration" == tt1:
-		if tt2 == "0": t1=tt1+" = 1\n"	
+		if tt2 == "0": t1=tt1+" = 1\n"
 		#if tt2 == "0": skip=1
+	elif "ignore_client_certificate_expiry" == tt1:
+		# only valid when mutual_authentication mode = "verify"; false is the
+		# default and conflicts when mode = "off", so drop it
+		if tt2 == "false": skip=1
 
 	return skip,t1,flag1,flag2
 
