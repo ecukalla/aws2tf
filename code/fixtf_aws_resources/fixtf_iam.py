@@ -29,7 +29,7 @@ def aws_iam_access_key(t1,tt1,tt2,flag1,flag2):
     if tt1 == "user":
         pkey="aws_iam_access_key."+tt2
         context.rproc[pkey]=True
-        t1=tt1+" = aws_iam_user."+tt2+".id\n"
+        t1=tt1+" = aws_iam_user."+common.tfname(tt2)+".id\n"
     return skip,t1,flag1,flag2
 
 
@@ -39,9 +39,9 @@ def aws_iam_group_membership(t1,tt1,tt2,flag1,flag2):
 
     skip=0
     if tt1=="user" and tt2 !="null":
-        t1=tt1+" = aws_iam_user."+tt2+".id\n"
+        t1=tt1+" = aws_iam_user."+common.tfname(tt2)+".id\n"
         common.add_dependancy("aws_iam_user", tt2)
-		
+
     return skip,t1,flag1,flag2
 
 
@@ -91,8 +91,13 @@ def aws_iam_role(t1,tt1,tt2,flag1,flag2):
 	elif tt1 == "permissions_boundary" and tt2 != "null":
 		if "arn:aws:iam::aws:policy" not in tt2:
 			pn=tt2.split("/")[-1]
-			common.add_dependancy("aws_iam_policy",tt2)
-			t1=tt1+" = aws_iam_policy."+pn+".arn\n"
+			if common.ref_skipped("aws_iam_policy", pn):
+				# boundary policy was skipped/excluded - drop the optional attribute
+				# (the literal ARN cannot be kept; it may be an invalid/partner ARN)
+				skip=1
+			else:
+				common.add_dependancy("aws_iam_policy",tt2)
+				t1=tt1+" = aws_iam_policy."+pn+".arn\n"
 	elif tt1 == "managed_policy_arns":   
 		if tt2 == "[]": 
 			skip=1
@@ -147,12 +152,25 @@ def aws_iam_role_policy_attachment(t1,tt1,tt2,flag1,flag2):
 
 
 
+def aws_iam_server_certificate(t1,tt1,tt2,flag1,flag2):
+
+
+    skip=0
+    if tt1 == "private_key":
+        # AWS never returns the private key, so it is exported as null. private_key
+        # is a required argument, so emit a placeholder and ignore changes to it -
+        # this lets the imported certificate validate without the real (unrecoverable) key.
+        t1='  private_key       = "IMPORT_PLACEHOLDER_PRIVATE_KEY" # sensitive - not retrievable from AWS\n  lifecycle {\n    ignore_changes = [private_key]\n  }\n'
+    return skip,t1,flag1,flag2
+
+
+
 def aws_iam_user_group_membership(t1,tt1,tt2,flag1,flag2):
 
 
     skip=0
     if tt1 == "user":
-        t1=tt1+" = aws_iam_user."+tt2+".id\n"
+        t1=tt1+" = aws_iam_user."+common.tfname(tt2)+".id\n"
         common.add_dependancy("aws_iam_user", tt2)
     elif tt1 == "groups":
         t1,skip = fixtf.deref_array(t1, tt1, tt2, "aws_iam_group", "", skip)

@@ -61,10 +61,21 @@ def aws_lb_listener_rule(t1,tt1,tt2,flag1,flag2):
 
 
 
+def aws_lb(t1,tt1,tt2,flag1,flag2):
+
+
+	skip=0
+	# name_prefix conflicts with name; imported resources always have a name
+	if tt1 == "name_prefix": skip=1
+	return skip,t1,flag1,flag2
+
+
 def aws_lb_target_group(t1,tt1,tt2,flag1,flag2):
 
 
 	skip=0
+	# name_prefix conflicts with name; imported resources always have a name
+	if tt1 == "name_prefix": skip=1
 	if "on_deregistration" in tt1:
 		if tt2 == "null": t1=tt1+" = \"no_rebalance\"\n"
 	if "on_unhealthy" in tt1:

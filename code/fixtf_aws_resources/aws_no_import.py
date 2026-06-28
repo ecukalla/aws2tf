@@ -76,6 +76,7 @@ noimport = {
     "aws_networkmanager_attachment_accepter": True,
     "aws_opensearch_domain_policy": True,
     "aws_opensearch_package_association": True,
+    "aws_organizations_delegated_administrator": True, # import id needs ACCOUNTID/SERVICEPRINCIPAL; generic getter only has the account id
     "aws_opsworks_ecs_cluster_layer": True,
     "aws_opsworks_ganglia_layer": True,
     "aws_opsworks_haproxy_layer": True,
@@ -94,6 +95,7 @@ noimport = {
     "aws_quicksight_user": True,
     "aws_resourcegroups_resource": True,
     "aws_s3_object_copy": True,
+    "aws_sagemaker_servicecatalog_portfolio_status": True, # plan refresh needs sagemaker:GetSagemakerServicecatalogPortfolioStatus (often not granted)
     "aws_securityhub_standards_control": True,
     "aws_servicecatalog_organizations_access": True,
     "aws_ses_domain_identity_verification": True,

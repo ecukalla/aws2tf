@@ -439,7 +439,12 @@ FIXTF_MODULES = {
 
 
 def fixtf(ttft,tf):
-  
+
+    # track the resource currently being generated (type__name) so derefs can
+    # avoid creating an illegal self-reference (e.g. a role trust policy that
+    # lists the role's own ARN as a principal).
+    context.current_tf=tf
+
     rf=tf+".out"
     tf2=tf+".tf"
 
@@ -637,6 +642,12 @@ def fixtf(ttft,tf):
         context.stripstart="{"
         context.stripend="}"
 
+    if ttft=="aws_s3_bucket_website_configuration":
+        # routing_rule (block) conflicts with routing_rules (json); keep the json
+        context.stripblock="routing_rule {"
+        context.stripstart="{"
+        context.stripend="}"
+
     if ttft=="aws_instance":
         context.stripblock="primary_network_interface {"
         context.stripstart="{"
@@ -814,12 +825,12 @@ def globals_replace(t1,tt1,tt2):
     ## it is a single arn
     if tt2.startswith("arn:") and "," not in tt2:
         if tt2.startswith("arn:aws:kms:"): 
-            tt2=tt2.split("/")[-1]	
+            tt2=tt2.split("/")[-1]
             if tt1!="Resource":
-                if aws_common.check_key(tt2):
+                if aws_common.check_key(tt2) and not common.ref_skipped("aws_kms_key", tt2):
                     if not context.dkms:
                         t1=tt1 + " = aws_kms_key.k-" + tt2 + ".arn\n"
-                        common.add_dependancy("aws_kms_key",tt2) 
+                        common.add_dependancy("aws_kms_key",tt2)
                     else:
                         t1=tt1 + " = data.aws_kms_key.k-" + tt2 + ".arn\n"
                         common.add_dependancy("aws_kms_key", tt2)
@@ -828,9 +839,16 @@ def globals_replace(t1,tt1,tt2):
             return t1
         
         if tt2.startswith("arn:aws:lambda") and "function:" in tt2:
+            if tt2.endswith("*"):
+                return t1
+            if tt1=="Resource":
+                return t1
             fname=tt2.split(":")[-1]
-            t1 = tt1 + " = aws_lambda_function." + fname + ".arn\n"
-            common.add_dependancy("aws_lambda_function", fname)
+            # only build a reference if the function was actually collected;
+            # otherwise (e.g. service-managed lambdas) keep the literal ARN
+            if fname in context.lambdalist and not common.ref_skipped("aws_lambda_function", fname) and not common.is_self_ref("aws_lambda_function", fname):
+                t1 = tt1 + " = aws_lambda_function." + fname + ".arn\n"
+                common.add_dependancy("aws_lambda_function", fname)
             return t1
 
         if tt2.startswith("arn:aws:cloudfront:") and ":distribution/" in tt2:
@@ -846,10 +864,10 @@ def globals_replace(t1,tt1,tt2):
             return t1
 
         if tt2.startswith("arn:aws:iam") and ":role/" in tt2:
-            if tt2.endswith("*"): 
+            if tt2.endswith("*"):
                 return t1
             tt2=tt2.split('/')[-1]
-            if tt2 in context.rolelist:
+            if tt2 in context.rolelist and not common.ref_skipped("aws_iam_role", tt2) and not common.is_self_ref("aws_iam_role", tt2):
                 t1=tt1 + " = aws_iam_role." + tt2 + ".arn\n"
                 common.add_dependancy("aws_iam_role",tt2)
             return t1
@@ -1096,12 +1114,13 @@ def deref_role_arn(t1,tt1,tt2):
     elif ":role/" in tt2:
         if tt2.endswith("*"): return t1
         if tt2.startswith("arn:"): tt2=tt2.split('/')[-1]
-        if tt2 in context.rolelist:
+        if tt2 in context.rolelist and not common.ref_skipped("aws_iam_role", tt2) and not common.is_self_ref("aws_iam_role", tt2):
             t1=tt1 + " = aws_iam_role." + tt2 + ".arn\n"
             common.add_dependancy("aws_iam_role",tt2)
-            
+
     # it's not an arn - just a name
     elif ":" not in tt2 and tt2 != "null": # assume it's a role name
+        if common.ref_skipped("aws_iam_role", tt2): return t1
         t1=tt1 + " = aws_iam_role." + tt2 + ".arn\n"
         common.add_dependancy("aws_iam_role", tt2)
 

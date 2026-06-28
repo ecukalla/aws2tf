@@ -972,6 +972,16 @@ def tfplan1(mymess):
    com = "mv aws_*.tf imported"
    rout = rc(com)
 
+   # Ensure all previously-generated resource configs are present in the working
+   # dir before generate-config-out, otherwise terraform fails the plan with
+   # "Reference to undeclared resource" (e.g. log_stream -> log_group) and never
+   # writes resources.out. Done in Python because rc() runs simple commands
+   # without a shell, so the "cp imported/aws_*.tf ." glob above is a no-op.
+   for src in glob.glob("imported/aws_*.tf"):
+      dst = os.path.basename(src)
+      if not os.path.exists(dst):
+         shutil.copy(src, dst)
+
    com = "terraform plan -generate-config-out=" + \
        rf + " -out tfplan -json > plan1.json"
    if not context.fast: log.info(com)
@@ -1118,6 +1128,16 @@ def tfplan3():
    if context.merge:
       com = "cp imported/aws_*.tf ."
       rout = rc(com)
+   else:
+      # On re-runs, resources generated in a prior pass live only in imported/.
+      # Restore them so referenced targets (log groups, LBs, web ACLs, etc.) are
+      # declared in the module at validate time. Done in Python because rc() runs
+      # without a shell for simple commands, so a "cp imported/aws_*.tf ." glob is
+      # never expanded. Skip files already present to keep freshly-generated ones.
+      for src in glob.glob("imported/aws_*.tf"):
+         dst = os.path.basename(src)
+         if not os.path.exists(dst):
+            shutil.copy(src, dst)
    if not glob.glob("aws_*.tf"):
       log.error("No aws_*.tf files found for this resource, exiting ....")
       log.info("exit 019")
@@ -1833,6 +1853,13 @@ def splitf(input_file):
    # Read the entire file content at once
    with open(input_file, 'r') as f:
         content = f.read()
+
+   # terraform's -generate-config-out emits `stickiness { duration = 0 }` for
+   # weighted-forward actions that have stickiness disabled, but the aws provider
+   # rejects duration < 1 (valid range 1-604800). Coerce to the minimum valid
+   # value (it is ignored while stickiness is disabled). Targets the bare
+   # `duration = 0` token only, so cookie_duration / *_duration_* are untouched.
+   content = re.sub(r'(\n[ \t]*)duration = 0(?=\n)', r'\g<1>duration = 1', content)
    
     # Use a more efficient splitting method
    resource_blocks = re.split(r'(?=\nresource ")', '\n' + content)
@@ -1881,8 +1908,46 @@ def splitf(input_file):
 
 # if type == "aws_vpc_endpoint": return "ec2","describe_vpc_endpoints","VpcEndpoints","VpcEndpointId","vpc-id"
 
+def ref_skipped(type, name):
+   # True if a referenced resource was excluded (-e/--exclude) or skipped
+   # (--skipname). In that case the target resource is never generated, so deref
+   # handlers must keep the attribute as a literal id/ARN string rather than emit
+   # a dangling Terraform reference to a resource that does not exist.
+   if type in context.all_extypes:
+       return True
+   if context.skipname and name is not None and context.skipname.lower() in str(name).lower():
+       return True
+   return False
+
+
+def is_self_ref(type, name):
+   # True if a deref target is the resource currently being generated. Building a
+   # reference to it would create an illegal self-reference (Terraform rejects a
+   # block that refers to itself, e.g. a role whose trust policy lists its own ARN).
+   return context.current_tf == type + "__" + name
+
+
+def tfname(theid):
+   # Sanitize an identifier the same way write_import generates a resource label,
+   # so cross-resource references (e.g. aws_iam_user.<name>.id) match the declared
+   # resource name. Names containing '.', '@', spaces etc. would otherwise produce
+   # references Terraform parses as attribute access (aws_iam_user.first.last.id).
+   tfid=theid.replace("/","_").replace(".","_").replace(":","_").replace("|","_").replace("$","_").replace(",","_").replace("&","_").replace("#","_").replace("[","_").replace("]","_").replace("=","_").replace("!","_").replace(";","_").replace(" ","_").replace("*","star").replace("\\052","star").replace("@","_").replace("\\64","_")
+   if tfid[:1].isdigit(): tfid="r-"+tfid
+   tfid = re.sub(r'\.\.', '_', tfid)
+   tfid = tfid.replace('/', '_')
+   return tfid
+
+
 #generally pass 3rd param as None - unless overriding
 def write_import(type,theid,tfid):
+   if context.skipname:
+       needle = context.skipname.lower()
+       haystacks = [h.lower() for h in (theid, tfid) if h]
+       if any(context.skipname in h for h in haystacks):
+           log.info("Skipping (skipname match '%s'): %s %s", context.skipname, type, theid)
+           context.rproc[type + "."  + theid] = True
+           return
    try:
       ## todo -  if theid starts with a number or is an od (but what if its hexdecimal  ?)
 
@@ -2408,6 +2473,9 @@ def handle_error(e,frame,clfn,descfn,topkey,id):
    fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
    if exn == "EndpointConnectionError":
       log.debug("No endpoint in this region for "+descfn+" - returning")
+      return
+   elif exn in ("SSLError", "ReadTimeoutError", "ConnectTimeoutError", "ConnectionClosedError", "ConnectionError"):
+      log.warning(str(e)+" for "+frame+" id="+str(id)+" - connection error, returning")
       return
    elif exn=="ClientError":
       if "does not exist" in str(e):
